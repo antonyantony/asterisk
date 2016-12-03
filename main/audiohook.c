@@ -256,7 +256,6 @@ static struct ast_frame *audiohook_read_frame_single(struct ast_audiohook *audio
 
 static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audiohook, size_t samples, struct ast_frame **read_reference, struct ast_frame **write_reference)
 {
-	int count;
 	int usable_read;
 	int usable_write;
 	short adjust_value;
@@ -299,12 +298,10 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 			/* Adjust read volume if need be */
 			if (audiohook->options.read_volume) {
 				adjust_value = abs(audiohook->options.read_volume);
-				for (count = 0; count < samples; count++) {
-					if (audiohook->options.read_volume > 0) {
-						ast_slinear_saturated_multiply(&buf1[count], &adjust_value);
-					} else if (audiohook->options.read_volume < 0) {
-						ast_slinear_saturated_divide(&buf1[count], &adjust_value);
-					}
+				if (audiohook->options.read_volume > 0) {
+					ast_slinear_saturated_multiply_all(buf1, &adjust_value, samples);
+				} else if (audiohook->options.read_volume < 0) {
+					ast_slinear_saturated_divide_all(buf1, &adjust_value, samples);
 				}
 			}
 		}
@@ -319,12 +316,10 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 			/* Adjust write volume if need be */
 			if (audiohook->options.write_volume) {
 				adjust_value = abs(audiohook->options.write_volume);
-				for (count = 0; count < samples; count++) {
-					if (audiohook->options.write_volume > 0) {
-						ast_slinear_saturated_multiply(&buf2[count], &adjust_value);
-					} else if (audiohook->options.write_volume < 0) {
-						ast_slinear_saturated_divide(&buf2[count], &adjust_value);
-					}
+				if (audiohook->options.write_volume > 0) {
+					ast_slinear_saturated_multiply_all(buf2, &adjust_value, samples);
+				} else if (audiohook->options.write_volume < 0) {
+					ast_slinear_saturated_divide_all(buf2, &adjust_value, samples);
 				}
 			}
 		}
@@ -348,9 +343,7 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 	if (read_buf) {
 		frame.data.ptr = read_buf;
 		if (write_buf) {
-			for (count = 0; count < samples; count++) {
-				ast_slinear_saturated_add(read_buf++, write_buf++);
-			}
+			ast_slinear_saturated_add_all(read_buf, write_buf, samples);
 		}
 	} else if (write_buf) {
 		frame.data.ptr = write_buf;
@@ -978,8 +971,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 
 	/* If this frame is being written out to the channel then we need to use whisper sources */
 	if (!AST_LIST_EMPTY(&audiohook_list->whisper_list)) {
-		int i = 0;
-		short read_buf[samples], combine_buf[samples], *data1 = NULL, *data2 = NULL;
+		short read_buf[samples], combine_buf[samples];
 		memset(&combine_buf, 0, sizeof(combine_buf));
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->whisper_list, audiohook, list) {
 			struct ast_slinfactory *factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_factory : &audiohook->write_factory);
@@ -997,17 +989,13 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 			audiohook_list_set_hook_rate(audiohook_list, audiohook, &internal_sample_rate);
 			if (ast_slinfactory_available(factory) >= samples && ast_slinfactory_read(factory, read_buf, samples)) {
 				/* Take audio from this whisper source and combine it into our main buffer */
-				for (i = 0, data1 = combine_buf, data2 = read_buf; i < samples; i++, data1++, data2++) {
-					ast_slinear_saturated_add(data1, data2);
-				}
+				ast_slinear_saturated_add_all(combine_buf, read_buf, samples);
 			}
 			ast_audiohook_unlock(audiohook);
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 		/* We take all of the combined whisper sources and combine them into the audio being written out */
-		for (i = 0, data1 = middle_frame->data.ptr, data2 = combine_buf; i < samples; i++, data1++, data2++) {
-			ast_slinear_saturated_add(data1, data2);
-		}
+		ast_slinear_saturated_add_all(middle_frame->data.ptr, combine_buf, samples);
 		middle_frame_manipulated = 1;
 	}
 

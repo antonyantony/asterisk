@@ -266,14 +266,11 @@ static void softmix_process_write_audio(struct softmix_translate_helper *trans_h
 	struct softmix_channel *sc)
 {
 	struct softmix_translate_helper_entry *entry = NULL;
-	int i;
 
 	/* If we provided audio that was not determined to be silence,
 	 * then take it out while in slinear format. */
 	if (sc->have_audio && sc->talking) {
-		for (i = 0; i < sc->write_frame.samples; i++) {
-			ast_slinear_saturated_subtract(&sc->final_buf[i], &sc->our_buf[i]);
-		}
+		ast_slinear_saturated_subtract_all(sc->final_buf, sc->our_buf, sc->write_frame.samples);
 		/* check to see if any entries exist for the format. if not we'll want
 		   to remove it during cleanup */
 		AST_LIST_TRAVERSE(&trans_helper->entries, entry, entry) {
@@ -915,7 +912,6 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 	int timingfd;
 	int update_all_rates = 0; /* set this when the internal sample rate has changed */
 	unsigned int idx;
-	unsigned int x;
 	int res = -1;
 
 	timer = softmix_data->timer;
@@ -1006,9 +1002,7 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 		/* mix it like crazy */
 		memset(buf, 0, softmix_datalen);
 		for (idx = 0; idx < mixing_array.used_entries; ++idx) {
-			for (x = 0; x < softmix_samples; ++x) {
-				ast_slinear_saturated_add(buf + x, mixing_array.buffers[idx] + x);
-			}
+			ast_slinear_saturated_add_all(buf, mixing_array.buffers[idx], softmix_samples);
 		}
 
 		/* Next step go through removing the channel's own audio and creating a good frame... */

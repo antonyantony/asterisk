@@ -646,7 +646,6 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 
 int ast_frame_adjust_volume(struct ast_frame *f, int adjustment)
 {
-	int count;
 	short *fdata = f->data.ptr;
 	short adjust_value = abs(adjustment);
 
@@ -658,12 +657,10 @@ int ast_frame_adjust_volume(struct ast_frame *f, int adjustment)
 		return 0;
 	}
 
-	for (count = 0; count < f->samples; count++) {
-		if (adjustment > 0) {
-			ast_slinear_saturated_multiply(&fdata[count], &adjust_value);
-		} else if (adjustment < 0) {
-			ast_slinear_saturated_divide(&fdata[count], &adjust_value);
-		}
+	if (adjustment > 0) {
+		ast_slinear_saturated_multiply_all(fdata, &adjust_value, f->samples);
+	} else if (adjustment < 0) {
+		ast_slinear_saturated_divide_all(fdata, &adjust_value, f->samples);
 	}
 
 	return 0;
@@ -671,9 +668,6 @@ int ast_frame_adjust_volume(struct ast_frame *f, int adjustment)
 
 int ast_frame_slinear_sum(struct ast_frame *f1, struct ast_frame *f2)
 {
-	int count;
-	short *data1, *data2;
-
 	if ((f1->frametype != AST_FRAME_VOICE) || (ast_format_cmp(f1->subclass.format, ast_format_slin) != AST_FORMAT_CMP_NOT_EQUAL))
 		return -1;
 
@@ -683,10 +677,7 @@ int ast_frame_slinear_sum(struct ast_frame *f1, struct ast_frame *f2)
 	if (f1->samples != f2->samples)
 		return -1;
 
-	for (count = 0, data1 = f1->data.ptr, data2 = f2->data.ptr;
-	     count < f1->samples;
-	     count++, data1++, data2++)
-		ast_slinear_saturated_add(data1, data2);
+	ast_slinear_saturated_add_all(f1->data.ptr, f2->data.ptr, f1->samples);
 
 	return 0;
 }

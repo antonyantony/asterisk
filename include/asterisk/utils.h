@@ -336,7 +336,7 @@ char *ast_escape_semicolons(const char *string, char *outbuf, int buflen);
  */
 void ast_unescape_quoted(char *quote_str);
 
-static force_inline void ast_slinear_saturated_add(short *input, short *value)
+static force_inline void ast_slinear_saturated_add(int16_t * const input, const int16_t * const value)
 {
 	int res;
 
@@ -349,7 +349,15 @@ static force_inline void ast_slinear_saturated_add(short *input, short *value)
 		*input = (short) res;
 }
 
-static force_inline void ast_slinear_saturated_subtract(short *input, short *value)
+static force_inline void ast_slinear_saturated_add_all(int16_t * const a, const int16_t * const b, size_t samples)
+{
+	size_t i = 0;
+	for (; i < samples; i++) {
+		ast_slinear_saturated_add(&a[i], &b[i]);
+	}
+}
+
+static force_inline void ast_slinear_saturated_subtract(int16_t * const input, const int16_t * const value)
 {
 	int res;
 
@@ -362,7 +370,15 @@ static force_inline void ast_slinear_saturated_subtract(short *input, short *val
 		*input = (short) res;
 }
 
-static force_inline void ast_slinear_saturated_multiply(short *input, short *value)
+static force_inline void ast_slinear_saturated_subtract_all(int16_t * const a, const int16_t * const b, size_t samples)
+{
+	size_t i = 0;
+	for (; i < samples; i++) {
+		ast_slinear_saturated_subtract(&a[i], &b[i]);
+	}
+}
+
+static force_inline void ast_slinear_saturated_multiply(int16_t * const input, const int16_t * const value)
 {
 	int res;
 
@@ -375,9 +391,25 @@ static force_inline void ast_slinear_saturated_multiply(short *input, short *val
 		*input = (short) res;
 }
 
-static force_inline void ast_slinear_saturated_divide(short *input, short *value)
+static force_inline void ast_slinear_saturated_multiply_all(int16_t * const input, const int16_t * const value, size_t samples)
+{
+	size_t i = 0;
+	for (; i < samples; i++) {
+		ast_slinear_saturated_multiply(&input[i], value);
+	}
+}
+
+static force_inline void ast_slinear_saturated_divide(int16_t * const input, const int16_t * const value)
 {
 	*input /= *value;
+}
+
+static force_inline void ast_slinear_saturated_divide_all(int16_t * const input, const int16_t * const value, size_t samples)
+{
+	size_t i = 0;
+	for (; i < samples; i++) {
+		ast_slinear_saturated_divide(&input[i], value);
+	}
 }
 
 #ifdef localtime_r
