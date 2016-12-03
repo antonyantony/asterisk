@@ -27,7 +27,10 @@
 
 #include <time.h>	/* we want to override localtime_r */
 #include <unistd.h>
+#include <math.h>
 #include <string.h>
+
+#include <emmintrin.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
@@ -357,6 +360,17 @@ static force_inline void ast_slinear_saturated_add_all(int16_t * const a, const 
 	}
 }
 
+static force_inline void ast_slinear_saturated_add_all_sse2(int16_t * const a, const int16_t * const b, size_t samples)
+{
+	size_t i = 0;
+	__m128i xmm_a, xmm_b;
+	for (; i < samples; i += 8) {
+		xmm_a = _mm_loadu_si128((__m128i *) a);
+		xmm_b = _mm_loadu_si128((__m128i *) b);
+		_mm_storeu_si128((__m128i *) a, _mm_adds_epi16(xmm_a, xmm_b));
+	}
+}
+
 static force_inline void ast_slinear_saturated_subtract(int16_t * const input, const int16_t * const value)
 {
 	int res;
@@ -378,7 +392,18 @@ static force_inline void ast_slinear_saturated_subtract_all(int16_t * const a, c
 	}
 }
 
-static force_inline void ast_slinear_saturated_multiply(int16_t * const input, const int16_t * const value)
+static force_inline void ast_slinear_saturated_subtract_all_sse2(int16_t * const a, const int16_t * const b, size_t samples)
+{
+	size_t i = 0;
+	__m128i xmm_a, xmm_b;
+	for (; i < samples; i += 8) {
+		xmm_a = _mm_loadu_si128((__m128i *) a);
+		xmm_b = _mm_loadu_si128((__m128i *) b);
+		_mm_storeu_si128((__m128i *) a, _mm_subs_epi16(xmm_a, xmm_b));
+	}
+}
+
+static force_inline void ast_slinear_saturated_multiply(int16_t * const input, const uint16_t * const value)
 {
 	int res;
 
@@ -391,7 +416,7 @@ static force_inline void ast_slinear_saturated_multiply(int16_t * const input, c
 		*input = (short) res;
 }
 
-static force_inline void ast_slinear_saturated_multiply_all(int16_t * const input, const int16_t * const value, size_t samples)
+static force_inline void ast_slinear_saturated_multiply_all(int16_t * const input, const uint16_t * const value, size_t samples)
 {
 	size_t i = 0;
 	for (; i < samples; i++) {
@@ -399,14 +424,31 @@ static force_inline void ast_slinear_saturated_multiply_all(int16_t * const inpu
 	}
 }
 
-static force_inline void ast_slinear_saturated_divide(int16_t * const input, const int16_t * const value)
+static force_inline void ast_slinear_saturated_divide(int16_t * const input, const uint16_t * const value)
 {
 	*input /= *value;
 }
 
-static force_inline void ast_slinear_saturated_divide_all(int16_t * const input, const int16_t * const value, size_t samples)
+#define IS_POWER_OF_TWO(x) (!((x) & ((x) - 1)))
+
+static force_inline void ast_slinear_saturated_divide_all(int16_t * const input, const uint16_t * const value, size_t samples)
 {
 	size_t i = 0;
+
+	/* We don't support division by a negative number */
+	if (*value <= 0) {
+		return;
+	}
+
+	/* Fast path */
+	if (IS_POWER_OF_TWO(*value)) {
+		int exponent = (int) log2(*value);
+		for (; i < samples; i++) {
+			input[i] >>= exponent;
+		}
+		return;
+	}
+
 	for (; i < samples; i++) {
 		ast_slinear_saturated_divide(&input[i], value);
 	}
