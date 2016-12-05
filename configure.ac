@@ -407,6 +407,10 @@ AC_SUBST(NOISY_BUILD)
 AC_SUBST(AST_DEVMODE)
 AC_SUBST(AST_DEVMODE_STRICT)
 
+AC_ARG_ENABLE([intrinsics],
+	[AS_HELP_STRING([--disable-intrinsics], [Disable intrinsics optimizations])],,
+	[enable_intrinsics=yes])
+
 AST_OPTION_ONLY([sounds-cache], [SOUNDS_CACHE_DIR], [cached sound tarfiles], [])
 AST_OPTION_ONLY([externals-cache], [EXTERNALS_CACHE_DIR], [cached external module tarfiles], [])
 
@@ -2679,6 +2683,42 @@ if test "${ac_cv_header_syslog_h}" = "yes"; then
 fi
 
 AC_SUBST([PBX_SYSLOG])
+
+AS_IF([test x"$enable_intrinsics" = x"yes"],[
+  intrinsics_support=""
+  AS_CASE([$host_cpu],
+  [i?86|x86_64],
+  [
+    AST_CHECK_INTRINSICS(
+      [SSE2],
+      [$X86_SSE2_CFLAGS],
+      [AST_X86_MAY_HAVE_SSE2],
+      [AST_X86_PRESUME_SSE2],
+      [[#include <emmintrin.h>
+        #include <time.h>
+      ]],
+      [[
+        __m128i mtest;
+        mtest = _mm_set1_epi32((int)time(NULL));
+        mtest = _mm_mul_epu32(mtest, mtest);
+        return _mm_cvtsi128_si32(mtest);
+      ]]
+    )
+    AS_IF([test x"$AST_X86_MAY_HAVE_SSE2" = x"1" && test x"$AST_X86_PRESUME_SSE2" != x"1"],
+      [
+        AST_X86_SSE2_CFLAGS="$X86_SSE2_CFLAGS"
+        AC_SUBST([AST_X86_SSE2_CFLAGS])
+      ]
+    )
+  ],
+  [
+    AC_MSG_WARN([No intrinsics support for your architecture])
+    intrinsics_support="no"
+  ])
+],
+[
+  intrinsics_support="no"
+])
 
 if test -f makeopts; then
 	${ac_cv_path_EGREP} 'CURSES|GTK2|OSARCH|NEWT' makeopts > makeopts.acbak
