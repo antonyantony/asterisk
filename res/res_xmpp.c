@@ -1,3 +1,5 @@
+/* OAuth 2.0 */
+
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -61,6 +63,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/cli.h"
 #include "asterisk/config_options.h"
+#include "asterisk/json.h"
 
 /*** DOCUMENTATION
 	<application name="JabberSend" language="en_US" module="res_xmpp">
@@ -323,6 +326,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<configOption name="secret">
 					<synopsis>XMPP password</synopsis>
 				</configOption>
+				<configOption name="access_token">
+					<synopsis>XMPP access token</synopsis>
+				</configOption>
+				<configOption name="oauth_id">
+					<synopsis>XMPP oauth2 client_id </synopsis>
+				</configOption>
+				<configOption name="oauth_secret">
+					<synopsis>XMPP oauth2 client_secret </synopsis>
+				</configOption>
+				<configOption name="oauth_url">
+				<synopsis>XMPP oauth2 end point url </synopsis>
+				</configOption>
 				<configOption name="serverhost">
 					<synopsis>Route to server, e.g. talk.google.com</synopsis>
 				</configOption>
@@ -461,6 +476,10 @@ struct ast_xmpp_client_config {
 		AST_STRING_FIELD(name);        /*!< Name of the client connection */
 		AST_STRING_FIELD(user);        /*!< Username to use for authentication */
 		AST_STRING_FIELD(password);    /*!< Password to use for authentication */
+		AST_STRING_FIELD(access_token);    /*!< Access token to use for authentication */
+		AST_STRING_FIELD(oauth_id);   /* client id for OAUTH2 */
+		AST_STRING_FIELD(oauth_secret); /* client secret for OAUTH2 */
+		AST_STRING_FIELD(oauth_url);   /* end point url */
 		AST_STRING_FIELD(server);      /*!< Server hostname */
 		AST_STRING_FIELD(statusmsg);   /*!< Status message for presence */
 		AST_STRING_FIELD(pubsubnode);  /*!< Pubsub node */
@@ -529,6 +548,7 @@ static ast_cond_t message_received_condition;
 static ast_mutex_t messagelock;
 
 static int xmpp_client_config_post_apply(void *obj, void *arg, int flags);
+static void fetch_access_token(struct ast_xmpp_client_config *cfg);
 
 /*! \brief Destructor function for configuration */
 static void ast_xmpp_client_config_destructor(void *obj)
@@ -2714,7 +2734,7 @@ static int xmpp_client_authenticate_digest(struct ast_xmpp_client *client, struc
 	iks_insert_cdata(iks_insert(query, "resource"), client->jid->resource, 0);
 
 	iks_insert_attrib(query, "xmlns", "jabber:iq:auth");
-	snprintf(sidpass, sizeof(sidpass), "%s%s", iks_find_attrib(node, "id"), cfg->password);
+	snprintf(sidpass, sizeof(sidpass), "%s%s", iks_find_attrib(node, "id"), cfg->access_token);
 	ast_sha1_hash(buf, sidpass);
 	iks_insert_cdata(iks_insert(query, "digest"), buf, 0);
 
@@ -2738,7 +2758,7 @@ static int xmpp_client_authenticate_digest(struct ast_xmpp_client *client, struc
 /*! \brief Internal function called when we need to authenticate using SASL */
 static int xmpp_client_authenticate_sasl(struct ast_xmpp_client *client, struct ast_xmpp_client_config *cfg, int type, iks *node)
 {
-	int features, len = strlen(client->jid->user) + strlen(cfg->password) + 3;
+	int features, len = strlen(client->jid->user) + strlen(cfg->access_token) + 3;
 	iks *auth;
 	char combined[len];
 	char base64[(len + 2) * 4 / 3];
@@ -2751,7 +2771,7 @@ static int xmpp_client_authenticate_sasl(struct ast_xmpp_client *client, struct 
 	features = iks_stream_features(node);
 
 	if ((features & IKS_STREAM_SASL_MD5) && !xmpp_is_secure(client)) {
-		if (iks_start_sasl(client->parser, IKS_SASL_DIGEST_MD5, (char*)client->jid->user, (char*)cfg->password) != IKS_OK) {
+		if (iks_start_sasl(client->parser, IKS_SASL_DIGEST_MD5, (char*)client->jid->user, (char*)cfg->access_token) != IKS_OK) {
 			ast_log(LOG_ERROR, "Tried to authenticate client '%s' using SASL DIGEST-MD5 but could not\n", client->name);
 			return -1;
 		}
@@ -2772,14 +2792,16 @@ static int xmpp_client_authenticate_sasl(struct ast_xmpp_client *client, struct 
 	}
 
 	iks_insert_attrib(auth, "xmlns", IKS_NS_XMPP_SASL);
-	iks_insert_attrib(auth, "mechanism", "PLAIN");
+	iks_insert_attrib(auth, "mechanism", "X-OAUTH2");
+	iks_insert_attrib(auth, "auth:service", "oauth2");
+	iks_insert_attrib(auth, "xmlns:auth", "http://www.google.com/talk/protocol/auth");
 
 	if (strchr(client->jid->user, '/')) {
 		char *user = ast_strdupa(client->jid->user);
 
-		snprintf(combined, sizeof(combined), "%c%s%c%s", 0, strsep(&user, "/"), 0, cfg->password);
+		snprintf(combined, sizeof(combined), "%c%s%c%s", 0, strsep(&user, "/"), 0, cfg->access_token);
 	} else {
-		snprintf(combined, sizeof(combined), "%c%s%c%s", 0, client->jid->user, 0, cfg->password);
+		snprintf(combined, sizeof(combined), "%c%s%c%s", 0, client->jid->user, 0, cfg->access_token);
 	}
 
 	ast_base64encode(base64, (const unsigned char *) combined, len - 1, (len + 2) * 4 / 3);
@@ -2867,7 +2889,7 @@ static int xmpp_component_authenticate(struct ast_xmpp_client *client, struct as
 	char secret[160], shasum[320], message[344];
 	ikspak *pak = iks_packet(node);
 
-	snprintf(secret, sizeof(secret), "%s%s", pak->id, cfg->password);
+	snprintf(secret, sizeof(secret), "%s%s", pak->id, cfg->access_token);
 	ast_sha1_hash(shasum, secret);
 	snprintf(message, sizeof(message), "<handshake>%s</handshake>", shasum);
 
@@ -3612,6 +3634,10 @@ static int xmpp_client_reconnect(struct ast_xmpp_client *client)
 		return -1;
 	}
 
+	ast_log(LOG_NOTICE , "Connecting to client token : %s\n" , clientcfg->access_token);
+
+	fetch_access_token(clientcfg);
+
 	ast_xmpp_client_disconnect(client);
 
 	client->timeout = 50;
@@ -3628,7 +3654,7 @@ static int xmpp_client_reconnect(struct ast_xmpp_client *client)
 
 	/* Set socket timeout options */
 	setsockopt(iks_fd(client->parser), SOL_SOCKET, SO_RCVTIMEO, (char *)&tv,sizeof(struct timeval));
-	
+
 	if (res == IKS_NET_NOCONN) {
 		ast_log(LOG_ERROR, "No XMPP connection available when trying to connect client '%s'\n", client->name);
 		return -1;
@@ -3833,6 +3859,33 @@ static int xmpp_client_config_merge_buddies(void *obj, void *arg, int flags)
 
 	/* All buddies are unlinked from the configuration buddies container, always */
 	return 1;
+}
+
+static void fetch_access_token(struct ast_xmpp_client_config *cfg) {
+
+	char cmd[1024];
+	char cBuf[1024];
+	memset(cmd , 0 , sizeof(cmd));
+	snprintf(cmd , sizeof(cmd) - 1 , "CURL(%s,client_id=%s&client_secret=%s&refresh_token=%s&grant_type=refresh_token)" , cfg->oauth_url, cfg->oauth_id, cfg->oauth_secret, cfg->password);
+
+	ast_log(LOG_NOTICE , "Command %s\n" , cmd);
+
+	memset(cBuf , 0 , sizeof(cBuf));
+	ast_func_read(NULL, cmd , cBuf , sizeof(cBuf) - 1);
+	ast_log(LOG_NOTICE , "Command status : %s \n" , cBuf);
+
+	struct ast_json_error error;
+	struct ast_json * jobj = ast_json_load_string(cBuf, &error);
+	if(jobj != NULL) {
+		const char * token = ast_json_string_get(ast_json_object_get(jobj, "access_token"));
+		if(token != NULL) {
+			ast_string_field_set(cfg , access_token, token);
+		}
+		ast_log(LOG_NOTICE , "access Token : %s\n", token);
+	}
+	else {
+		ast_log(LOG_ERROR , "object is NULL\n");
+	}
 }
 
 static int xmpp_client_config_post_apply(void *obj, void *arg, int flags)
@@ -4614,6 +4667,9 @@ static int load_module(void)
 	aco_option_register(&cfg_info, "priority", ACO_EXACT, client_options, "1", OPT_UINT_T, 0, FLDSET(struct ast_xmpp_client_config, priority));
 	aco_option_register(&cfg_info, "port", ACO_EXACT, client_options, "5222", OPT_UINT_T, 0, FLDSET(struct ast_xmpp_client_config, port));
 	aco_option_register(&cfg_info, "timeout", ACO_EXACT, client_options, "5", OPT_UINT_T, 0, FLDSET(struct ast_xmpp_client_config, message_timeout));
+	aco_option_register(&cfg_info, "oauth_id", ACO_EXACT, client_options, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_xmpp_client_config, oauth_id));
+	aco_option_register(&cfg_info, "oauth_secret", ACO_EXACT, client_options, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_xmpp_client_config, oauth_secret));
+	aco_option_register(&cfg_info, "oauth_url", ACO_EXACT, client_options, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_xmpp_client_config, oauth_url));
 
 	/* Global options that can be overridden per client must not specify a default */
 	aco_option_register_custom(&cfg_info, "autoprune", ACO_EXACT, client_options, NULL, client_bitfield_handler, 0);
